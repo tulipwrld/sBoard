@@ -99,7 +99,7 @@ for el in set(data['clientID']):
 
 
 # In[5]
-# fill df with retention rates
+# fill df with mean durations
 
 
 k_cols = int(str(FINISH_DATE - START_DATE).split()[0]) + 1

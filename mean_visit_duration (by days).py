@@ -71,7 +71,7 @@ def pretty_date(s):
 ACCESS_TOKEN = ""
 COUNTER_ID = ""
 START_DATE = "2023-05-01" # YYYY-MM-DD
-FINISH_DATE = "2023-06-24" # YYYY-MM-DD
+FINISH_DATE = "2023-06-27" # YYYY-MM-DD
 FILE_NAME = "by_days"
 
 START_DATE, FINISH_DATE = str_to_date(START_DATE), str_to_date(FINISH_DATE)
@@ -87,15 +87,16 @@ except:
     print('Access denied')
     sys.exit()
 
+data.loc[:, 'visitDuration'] = data['visitDuration'].apply(lambda x: int(x))
+data['dt_date'] = pd.to_datetime(data['date'])
+
 
 # In[4]
-# get all visit dates for IDs
+# get visit dates for IDs
 
 
-id_visit_dates = {}
-
-for el in set(data['clientID']):
-    id_visit_dates[el] = set(map(lambda x: str_to_date(x), list(data[data['clientID'] == el]['date'])))
+visit_dates = data.groupby('clientID')['dt_date'].agg(set)
+first_visit_date = data.groupby('clientID')['dt_date'].agg(min)
 
 
 # In[5]
@@ -105,9 +106,6 @@ for el in set(data['clientID']):
 k_cols = int(str(FINISH_DATE - START_DATE).split()[0]) + 1
 df = pd.DataFrame({'Date' : [''] * k_cols})
 
-for i in range(k_cols):
-    df['Day ' + str(i)] = [None] * k_cols
-
 
 date = START_DATE
 row_i = k_cols - 1
@@ -115,35 +113,20 @@ row_i = k_cols - 1
 while date <= FINISH_DATE:
     df.at[row_i, 'Date'] = str(pretty_date(date_to_str(date)))
 
-    s1 = 0
-    all_ids_valid_visit_date = set()
 
-    for id in id_visit_dates.keys():
-        if date in id_visit_dates[id]:
-            all_ids_valid_visit_date.add(id)
-            s1 += sum(list(map(lambda x: int(x), data[(data['clientID'] == id) & (data['date'] == date_to_str(date))]['visitDuration'])))
+    all_ids_valid_visit_date = set(dict(filter(lambda x: x[1] == date, first_visit_date.items())).keys())
+    day_date = date
 
-    try:
-        df.at[row_i, 'Day 0'] = round(s1 / len(all_ids_valid_visit_date), 2)
-    except:
-        df.at[row_i, 'Day 0'] = 0
-
-
-    day_date = date + timedelta(1)
-
-    for i in range(row_i, 0, -1):
-        s2 = 0
-        active_users = set(data[data['clientID'].isin(all_ids_valid_visit_date)]['clientID'])
-        for id in list(active_users):
-            if day_date in id_visit_dates[id]:
-                s2 += sum(list(map(lambda x: int(x), data[(data['clientID'] == id) & (data['date'] == date_to_str(day_date))]['visitDuration'])))
+    for i in range(row_i + 1, 0, -1):
+        s = sum(data[(data['clientID'].isin(all_ids_valid_visit_date)) & (data['dt_date'] == day_date)]['visitDuration'])
 
         try:
-            df.at[row_i, 'Day ' + str(row_i - i + 1)] = round(s2 / len(all_ids_valid_visit_date), 2)
+            df.at[row_i, 'Day ' + str(row_i - i + 1)] = round(s / len(all_ids_valid_visit_date), 2)
         except:
             df.at[row_i, 'Day ' + str(row_i - i + 1)] = 0
 
         day_date = day_date + timedelta(1)
+
 
     date = date + timedelta(1)
     row_i -= 1

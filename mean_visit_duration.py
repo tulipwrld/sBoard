@@ -71,7 +71,7 @@ def pretty_date(s):
 ACCESS_TOKEN = ""
 COUNTER_ID = ""
 START_DATE = "2023-05-01" # YYYY-MM-DD
-FINISH_DATE = "2023-06-29" # YYYY-MM-DD
+FINISH_DATE = "2023-05-29" # YYYY-MM-DD
 INTERVAL = 1
 COL_NAME = "Day"
 
@@ -90,12 +90,7 @@ except:
     print('Access denied')
     sys.exit()
 
-
-# drop double registrations
-data0, data1 = data[data['isNewUser'] == '0'], data[data['isNewUser'] == '1']
-data1 = data1.drop_duplicates(subset = ['clientID', 'isNewUser'], keep = 'first')
-data = pd.concat([data0, data1], ignore_index = True)
-
+data = data[data['clientID'] != '0']
 data.loc[:, 'visitDuration'] = data['visitDuration'].apply(lambda x: int(x))
 data['dt_date'] = pd.to_datetime(data['date'])
 

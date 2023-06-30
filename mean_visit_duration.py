@@ -29,7 +29,7 @@ def get_cabinet_logs(date_from, date_to):
     )
 
     params = {
-        "fields": "ym:s:date,ym:s:clientID,ym:s:visitDuration",
+        "fields": "ym:s:date,ym:s:clientID,ym:s:visitDuration,ym:s:isNewUser",
         "source": "visits",
         "date1": date_from,
         "date2": date_to
@@ -71,7 +71,7 @@ def pretty_date(s):
 ACCESS_TOKEN = ""
 COUNTER_ID = ""
 START_DATE = "2023-05-01" # YYYY-MM-DD
-FINISH_DATE = "2023-06-27" # YYYY-MM-DD
+FINISH_DATE = "2023-06-29" # YYYY-MM-DD
 INTERVAL = 1
 COL_NAME = "Day"
 
@@ -99,7 +99,7 @@ data['dt_date'] = pd.to_datetime(data['date'])
 
 
 visit_dates = data.groupby('clientID')['dt_date'].agg(set)
-first_visit_date = data.groupby('clientID')['dt_date'].agg(min)
+first_visit_date = data[data['isNewUser'] == '1'].groupby('clientID')['dt_date'].agg(min)
 
 
 # In[5]

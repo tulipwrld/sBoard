@@ -90,6 +90,12 @@ except:
     print('Access denied')
     sys.exit()
 
+
+# drop double registrations
+data0, data1 = data[data['isNewUser'] == '0'], data[data['isNewUser'] == '1']
+data1 = data1.drop_duplicates(subset = ['clientID', 'isNewUser'], keep = 'first')
+data = pd.concat([data0, data1], ignore_index = True)
+
 data.loc[:, 'visitDuration'] = data['visitDuration'].apply(lambda x: int(x))
 data['dt_date'] = pd.to_datetime(data['date'])
 

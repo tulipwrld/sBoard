@@ -1,0 +1,346 @@
+# In[0]
+# import libraries; set settings
+
+
+from datetime import date
+import sys
+import pandas as pd
+from tapi_yandex_metrika import YandexMetrikaLogsapi
+import datetime as dt
+from datetime import datetime, timedelta
+import numpy as np
+from pydrive.auth import GoogleAuth
+from pydrive.drive import GoogleDrive
+
+import warnings
+warnings.filterwarnings("ignore")
+
+pd.set_option('display.max_columns', 500)
+
+
+# In[1]
+# set constants
+
+
+ACCESS_TOKEN = ""
+COUNTER_ID = ""
+PARENT_ID = ""
+N_MINUTES = 20
+START_DATE = "2023-05-01" # YYYY-MM-DD
+
+
+# In[2]
+# define functions
+
+
+def get_cabinet_logs(date_from, date_to):
+    client = YandexMetrikaLogsapi(
+        access_token = ACCESS_TOKEN,
+        default_url_params = {'counterId': COUNTER_ID},
+        wait_report = True
+    )
+
+    params = {
+        "fields": "ym:s:date,ym:s:clientID,ym:s:visitDuration,ym:s:isNewUser",
+        "source": "visits",
+        "date1": date_from,
+        "date2": date_to
+    }
+
+    info = client.create().post(params = params)
+    request_id = info["log_request"]["request_id"]
+
+    first_dt = dt.datetime.now()
+    report = client.download(requestId = request_id).get()
+    second_dt = dt.datetime.now()
+
+    # print('Download took:', second_dt - first_dt)
+
+    df = pd.DataFrame(report().to_values(), columns = [col.split(':')[-1] for col in report.columns])
+
+    return df
+
+
+def str_to_date(date_str):
+    date = datetime.strptime(date_str, '%Y-%m-%d').date()
+    return datetime(date.year, date.month, date.day)
+
+
+def date_to_str(date):
+    return str(date)[:10]
+
+
+def pretty_date(s):
+    """YYYY-MM-DD to DD.MM.YYYY"""
+
+    return '.'.join(s.split('-')[::-1])
+
+
+def get_cabinet_logs2(date_from, date_to):
+        client = YandexMetrikaLogsapi(
+            access_token = ACCESS_TOKEN,
+            default_url_params = {'counterId': COUNTER_ID},
+            wait_report = True
+        )
+
+        params = {
+            "fields": 'ym:pv:date,ym:pv:clientID,ym:pv:URL,ym:pv:goalsID',
+            "source": 'hits',
+            "date1": date_from,
+            "date2": date_to
+        }
+
+        info = client.create().post(params = params)
+        request_id = info["log_request"]["request_id"]
+
+        first_dt = dt.datetime.now()
+        report = client.download(requestId = request_id).get()
+        second_dt = dt.datetime.now()
+
+        # print('Download took:', second_dt - first_dt)
+
+        df = pd.DataFrame(report().to_values(), columns = [col.split(':')[-1] for col in report.columns])
+        df['reg_complete'] = df.goalsID.map(lambda x: 1 if '225037748' in x or '299601043' in x or '299601477' in x or '299601619' in x else 0)
+
+        return df
+
+
+def mean_visit_duration(interval, col_name, data):
+    """Расчет среднего времени, проведенного на сайте посетителем, по заданным когортам."""
+
+
+    start_date, finish_date = str_to_date(START_DATE), str_to_date(FINISH_DATE)
+    # make interval full
+    finish_date -= timedelta((int(str((finish_date - start_date)).split()[0]) + 1) % interval)
+
+    # get all visit dates for IDs
+    first_visit_date = data[data['isNewUser'] == '1'].groupby('clientID')['dt_date'].agg(min)
+
+    # fill df with mean durations
+    k_cols = int(str((finish_date - start_date + timedelta(1)) // interval).split()[0])
+    df = pd.DataFrame({'Date' : [''] * k_cols})
+
+    date = start_date
+    row_i = k_cols - 1
+
+    while date + timedelta(interval - 1) <= finish_date:
+        df.at[row_i, 'Date'] = str(pretty_date(date_to_str(date)))
+
+        interval_dates = [date + timedelta(i) for i in range(interval)]
+        all_ids_valid_visit_date = set(dict(filter(lambda x: x[1] in interval_dates, first_visit_date.items())).keys())
+
+        cur_date = date
+
+        for i in range(row_i + 1, 0, -1):
+            cur_interval_dates = [cur_date + timedelta(i) for i in range(interval)]
+            s = sum(data[(data['clientID'].isin(all_ids_valid_visit_date)) & (data['dt_date'].isin(cur_interval_dates))]['visitDuration'])
+
+            try:
+                df.at[row_i, col_name + ' ' + str(row_i - i + 1)] = round(s / len(all_ids_valid_visit_date), 2)
+            except:
+                df.at[row_i, col_name + ' ' + str(row_i - i + 1)] = 0
+
+            cur_date += timedelta(interval)
+
+        date += timedelta(interval)
+        row_i -= 1
+
+    return df
+
+
+def total_visit_duration(interval, data):
+    """Расчет общего времени, проведенного на сайте, по заданным интервалам."""
+
+
+    start_date, finish_date = str_to_date(START_DATE), str_to_date(FINISH_DATE)
+    # make interval full
+    finish_date -= timedelta((int(str((finish_date - start_date)).split()[0]) + 1) % interval)
+
+    # fill df
+    k_cols = int(str((str_to_date(FINISH_DATE) - str_to_date(START_DATE)) // interval).split()[0])
+    df = pd.DataFrame({'Date' : [''] * k_cols,
+                    'Total visit duration': [''] * k_cols})
+
+    cur_date = start_date
+
+    for row_i in range(k_cols):
+        df.at[row_i, 'Date'] = pretty_date(date_to_str(cur_date))
+
+        total = 0
+
+        for _ in range(interval):
+            total += sum(list(data[data['date'] == date_to_str(cur_date)]['visitDuration']))
+            cur_date += timedelta(1)
+
+        df.at[row_i, 'Total visit duration'] = total
+
+    return df
+
+
+def visits_N_minutes(interval, data):
+    """Расчет количества визитов на сайте больше N минут по заданным интервалам."""
+
+
+    start_date, finish_date = str_to_date(START_DATE), str_to_date(FINISH_DATE)
+    # make interval full
+    finish_date -= timedelta((int(str((finish_date - start_date)).split()[0]) + 1) % interval)
+
+    N_SECONDS = N_MINUTES * 60
+
+    # fill df
+    k_cols = int(str((finish_date - start_date) // interval).split()[0])
+    df = pd.DataFrame({'Date' : [''] * k_cols,
+                    'Visits': [''] * k_cols})
+
+    cur_date = start_date
+
+    for row_i in range(k_cols):
+        df.at[row_i, 'Date'] = pretty_date(date_to_str(cur_date))
+
+        total = 0
+
+        for _ in range(interval):
+            total += len(data[(data['date'] == date_to_str(cur_date)) & (data['visitDuration'] > N_SECONDS)])
+            cur_date += timedelta(1)
+
+        df.at[row_i, 'Visits'] = total
+
+    return df
+
+
+def retention_rate_IT(interval, data, id_reg_date, ids_valid_roles):
+    """Расчет retention rate для зарегистрировавшихся ITшников по когортам."""
+
+
+    start_date, finish_date = str_to_date(START_DATE), str_to_date(FINISH_DATE)
+    # make interval full
+    finish_date -= timedelta((int(str((finish_date - start_date)).split()[0]) + 1) % interval)
+
+    # create an empty df
+    k_cols = int(str(finish_date - start_date).split()[0]) + 1
+    df = pd.DataFrame({'Date' : [''] * k_cols,
+                    'Users': [''] * k_cols})
+
+    for i in range(k_cols):
+        df['Day ' + str(i)] = [None] * k_cols
+
+    # fill df with retention rates
+    date1 = start_date
+    row_i = k_cols - 1
+
+    while date1 <= finish_date:
+        df.at[row_i, 'Date'] = str(pretty_date(date_to_str(date1)))
+
+        all_valid_ids = set()
+
+        for id in id_reg_date.keys():
+            if id_reg_date[id] == date1 and id in ids_valid_roles:
+                all_valid_ids.add(id)
+
+        df.at[row_i, 'Users'] = '{0:,}'.format(len(all_valid_ids))
+        df.at[row_i, 'Day 0'] =  '100% (' + str(len(all_valid_ids)) + ' Users)'
+
+        day_date1 = date1 + timedelta(1)
+
+        for i in range(row_i, 0, -1):
+            day_valid_ids = set()
+            active_users = data[data['clientID'].isin(all_valid_ids)]
+
+            for id in active_users['clientID']:
+                actions = active_users[active_users['clientID'] == id]
+
+                for j in range(len(actions)):
+                    if str_to_date(actions['date'].iloc[j]) == day_date1:
+                        day_valid_ids.add(id)
+                        break
+
+            try:
+                df.at[row_i, 'Day ' + str(row_i - i + 1)] = str(round((len(day_valid_ids) * 100) / len(all_valid_ids), 2)) + '% (' + str(len(day_valid_ids)) + ' Users)'
+            except:
+                df.at[row_i, 'Day ' + str(row_i - i + 1)] = '0.00% (0 Users)'
+
+            day_date1 += timedelta(1)
+
+        date1 += timedelta(1)
+        start_date = date1
+        row_i -= 1
+
+    return df
+
+
+def upload(folder_id, df, name):
+    name += '.csv'
+
+    df.to_csv(name, index = False)
+
+    file = drive.CreateFile({'parents': [{'kind': 'drive#fileLink', 'id': folder_id}]})
+    file.SetContentFile(name)
+    file.Upload()
+
+
+# In[3]
+# download data
+
+
+FINISH_DATE = date_to_str(date.today() - timedelta(1))
+
+
+try:
+    data = get_cabinet_logs(date_to_str(START_DATE), date_to_str(FINISH_DATE))
+except:
+    print('Access denied')
+    sys.exit()
+
+data = data[data['clientID'] != '0']
+data.loc[:, 'visitDuration'] = data['visitDuration'].apply(lambda x: int(x))
+data['dt_date'] = pd.to_datetime(data['date'])
+
+
+data2 = get_cabinet_logs2(START_DATE, FINISH_DATE)
+
+
+# get registration dates for all IDs
+ids = set(data2['clientID'])
+id_reg_date = {}
+
+for el in ids:
+    try:
+        id_reg_date[el] = str_to_date(data2[(data2['clientID'] == el) & (data2['reg_complete'] == np.int64(1))]['date'].iloc[0])
+    except:
+        continue
+
+# get IDs with IT roles
+ids_valid_roles = set(data2[data2['URL'].str.contains('sboard.online/dashboard/personal-space')]['clientID'])
+
+
+
+# In[4]
+# create folder
+
+
+gauth = GoogleAuth()
+drive = GoogleDrive(gauth)
+
+folder_metadata = {'title': pretty_date(FINISH_DATE), 'parents': [{'id': PARENT_ID}], 'mimeType': 'application/vnd.google-apps.folder'}
+folder = drive.CreateFile(folder_metadata)
+folder.Upload()
+
+folder_id = folder['id']
+
+
+# In[5]
+# upload data
+
+
+intervals = {1: 'Day', 7: 'Week', 30: 'Month'}
+
+for interval, name in intervals.items():
+    cur = '(' + name + 's)'
+
+    upload(folder_id, mean_visit_duration(interval, name, data), 'Mean visit duration ' + cur)
+    upload(folder_id, total_visit_duration(interval, data), 'Total visit duration ' + cur)
+    upload(folder_id, visits_N_minutes(interval, data), 'Visits longer than ' + str(N_MINUTES) + ' minutes ' + cur)
+    upload(folder_id, retention_rate_IT(interval, data2, id_reg_date, ids_valid_roles), 'Retention rate IT ' + cur)
+
+
+# %%
